@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kabu_trader ダッシュボード</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --txt:#e6e8ec; --sub:#9aa0ab;
+          --up:#26a69a; --down:#ef5350; --accent:#5b8def; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Segoe UI",sans-serif;
+         padding:16px; max-width:760px; margin:0 auto; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px; }
+  .sub { color:var(--sub); font-size:12px; margin-bottom:16px; }
+  .badge { display:inline-block; background:#332; color:#fc6; font-size:11px;
+           padding:2px 8px; border-radius:10px; margin-left:6px; }
+  .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .card .label { color:var(--sub); font-size:12px; margin-bottom:6px; }
+  .card .val { font-size:22px; font-weight:600; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px;
+           padding:14px; margin-bottom:16px; }
+  .panel h2 { font-size:14px; margin:0 0 12px; color:var(--sub); font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:8px 6px; border-bottom:1px solid var(--line); }
+  th:first-child,td:first-child { text-align:left; }
+  th { color:var(--sub); font-weight:500; font-size:11px; }
+  .reason { color:var(--sub); font-size:11px; }
+  .refresh { color:var(--accent); font-size:12px; cursor:pointer; }
+  .empty { color:var(--sub); text-align:center; padding:24px; }
+</style>
+</head>
+<body>
+  <h1>kabu_trader ダッシュボード<span class="badge">紙上検証</span></h1>
+  <div class="sub">最終更新: <span id="updated">—</span> · <span class="refresh" onclick="load()">再読み込み</span></div>
+
+  <div class="cards">
+    <div class="card"><div class="label">本日の損益（コストなし）</div><div class="val" id="todayNo">—</div></div>
+    <div class="card"><div class="label">本日の損益（コスト込み）</div><div class="val" id="todayCost">—</div></div>
+    <div class="card"><div class="label">本日の取引数 / 勝率</div><div class="val" id="todayN">—</div></div>
+    <div class="card"><div class="label">通算損益（コスト込み）</div><div class="val" id="totalCost">—</div></div>
+  </div>
+
+  <div class="panel"><h2>保有中ポジション <span id="posUpd" class="reason"></span></h2>
+    <table id="posTbl"><thead><tr><th>銘柄</th><th>建値</th><th>現在値</th><th>含み損益</th></tr></thead>
+    <tbody id="posRows"></tbody></table>
+    <div class="empty" id="posEmpty" style="display:none">保有なし（ノーポジション）</div>
+  </div>
+
+  <div class="panel"><h2>累積損益の推移</h2><canvas id="chart" height="180"></canvas></div>
+
+  <div class="panel"><h2>取引明細（最新30件）</h2>
+    <table id="tbl"><thead><tr><th>日付/時刻</th><th>銘柄</th><th>買値→売値</th><th>損益</th></tr></thead>
+    <tbody id="rows"></tbody></table>
+    <div class="empty" id="empty" style="display:none">まだ取引がありません</div>
+  </div>
+
+<script>
+function tick(p){ return p<=3000?1: p<=5000?5: p<=30000?10:50; }
+const yen = n => (n>=0?'+':'') + Math.round(n).toLocaleString() + '円';
+const cls = n => n>=0?'up':'down';
+
+function costOf(r){ // 1トレードのスリッページ(半ティック): 買い+成行売り(利確以外)
+  const q=+r.qty, e=+r.entry, x=+r.exit;
+  let c = tick(e)*0.5*q;
+  if(r.reason!=='take_profit') c += tick(x)*0.5*q;
+  return c;
+}
+
+async function load(){
+  const res = await fetch('reports/trades.csv?t=' + Date.now());
+  const text = await res.text();
+  const lines = text.trim().split('\n');
+  const header = lines.shift();
+  const rows = lines.filter(l=>l.trim()).map(l=>{
+    const [date,time,symbol,qty,entry,exit,pnl,reason,dry] = l.split(',');
+    return {date,time,symbol,qty,entry,exit,pnl:+pnl,reason};
+  });
+  document.getElementById('updated').textContent = new Date().toLocaleString('ja-JP');
+
+  if(!rows.length){ document.getElementById('empty').style.display='block'; return; }
+
+  const today = rows.length ? rows[rows.length-1].date : null;
+  const todayRows = rows.filter(r=>r.date===today);
+  const sum = (arr,f)=>arr.reduce((s,r)=>s+f(r),0);
+  const tNo = sum(todayRows,r=>r.pnl);
+  const tCost = sum(todayRows,r=>r.pnl-costOf(r));
+  const wins = todayRows.filter(r=>r.pnl>0).length;
+  const totalCost = sum(rows,r=>r.pnl-costOf(r));
+
+  set('todayNo',yen(tNo),cls(tNo));
+  set('todayCost',yen(tCost),cls(tCost));
+  document.getElementById('todayN').textContent = `${todayRows.length}件 / ${todayRows.length?Math.round(wins/todayRows.length*100):0}%`;
+  set('totalCost',yen(totalCost),cls(totalCost));
+
+  // 日別累積
+  const byDay={};
+  rows.forEach(r=>{ byDay[r.date]=byDay[r.date]||{no:0,cost:0}; byDay[r.date].no+=r.pnl; byDay[r.date].cost+=r.pnl-costOf(r); });
+  const days=Object.keys(byDay).sort();
+  let cNo=0,cCost=0; const sNo=[],sCost=[];
+  days.forEach(d=>{ cNo+=byDay[d].no; cCost+=byDay[d].cost; sNo.push(cNo); sCost.push(cCost); });
+  drawChart(days,sNo,sCost);
+
+  // 明細(最新30)
+  const tb=document.getElementById('rows'); tb.innerHTML='';
+  rows.slice(-30).reverse().forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${r.date.slice(5)} ${r.time.slice(11,16)}</td>
+      <td>${r.symbol}</td>
+      <td>${(+r.entry).toFixed(0)}→${(+r.exit).toFixed(0)}<div class="reason">${r.reason}</div></td>
+      <td class="${cls(r.pnl)}">${yen(r.pnl)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+function set(id,txt,c){ const e=document.getElementById(id); e.textContent=txt; e.className='val '+c; }
+
+let chart;
+function drawChart(labels,sNo,sCost){
+  const ctx=document.getElementById('chart');
+  if(chart) chart.destroy();
+  chart=new Chart(ctx,{type:'line',
+    data:{labels:labels.map(d=>d.slice(5)),datasets:[
+      {label:'コストなし',data:sNo,borderColor:'#5b8def',backgroundColor:'transparent',tension:.2,pointRadius:2},
+      {label:'コスト込み',data:sCost,borderColor:'#ef5350',backgroundColor:'transparent',tension:.2,pointRadius:2}]},
+    options:{responsive:true,plugins:{legend:{labels:{color:'#9aa0ab',boxWidth:12}}},
+      scales:{x:{ticks:{color:'#9aa0ab'},grid:{color:'#2a2e38'}},
+              y:{ticks:{color:'#9aa0ab',callback:v=>v+'円'},grid:{color:'#2a2e38'}}}}});
+}
+async function loadPositions(){
+  try{
+    const res = await fetch('reports/positions.json?t=' + Date.now());
+    if(!res.ok) throw 0;
+    const data = await res.json();
+    const tb = document.getElementById('posRows'); tb.innerHTML='';
+    document.getElementById('posUpd').textContent = data.updated ? '('+data.updated.slice(11,16)+'時点)' : '';
+    if(!data.positions || !data.positions.length){
+      document.getElementById('posEmpty').style.display='block';
+      document.getElementById('posTbl').style.display='none'; return;
+    }
+    document.getElementById('posEmpty').style.display='none';
+    document.getElementById('posTbl').style.display='';
+    data.positions.forEach(p=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML = `<td>${p.symbol}</td><td>${p.entry}</td><td>${p.current}</td>
+        <td class="${cls(p.pnl)}">${yen(p.pnl)}<div class="reason">${p.pct>=0?'+':''}${p.pct}%</div></td>`;
+      tb.appendChild(tr);
+    });
+  }catch(e){ document.getElementById('posEmpty').style.display='block';
+    document.getElementById('posTbl').style.display='none'; }
+}
+function refresh(){ load(); loadPositions(); }
+refresh();
+setInterval(refresh, 60000); // 1分ごと自動更新
+</script>
+</body>
+</html>
