@@ -50,6 +50,8 @@
     <div class="empty" id="posEmpty" style="display:none">保有なし（ノーポジション）</div>
   </div>
 
+  <div class="panel"><h2>日ごとの収支（コスト有無）</h2><canvas id="dailyChart" height="180"></canvas></div>
+
   <div class="panel"><h2>累積損益の推移</h2><canvas id="chart" height="180"></canvas></div>
 
   <div class="panel"><h2>取引明細（最新30件）</h2>
@@ -103,6 +105,7 @@ async function load(){
   let cNo=0,cCost=0; const sNo=[],sCost=[];
   days.forEach(d=>{ cNo+=byDay[d].no; cCost+=byDay[d].cost; sNo.push(cNo); sCost.push(cCost); });
   drawChart(days,sNo,sCost);
+  drawDaily(days, days.map(d=>byDay[d].no), days.map(d=>byDay[d].cost));
 
   // 明細(最新30)
   const tb=document.getElementById('rows'); tb.innerHTML='';
@@ -130,6 +133,24 @@ function drawChart(labels,sNo,sCost){
     options:{responsive:true,plugins:{legend:{labels:{color:'#9aa0ab',boxWidth:12}}},
       scales:{x:{ticks:{color:'#9aa0ab'},grid:{color:'#2a2e38'}},
               y:{ticks:{color:'#9aa0ab',callback:v=>v+'円'},grid:{color:'#2a2e38'}}}}});
+}
+let dChart;
+function drawDaily(labels, dNo, dCost){
+  const ctx=document.getElementById('dailyChart');
+  if(dChart) dChart.destroy();
+  // コストなしは日の総収支、コスト込みはその内数。バーの色は正負で変える。
+  const colNo = dNo.map(v=>v>=0?'rgba(91,141,239,.55)':'rgba(239,83,80,.45)');
+  const colCost = dCost.map(v=>v>=0?'#26a69a':'#ef5350');
+  dChart=new Chart(ctx,{type:'bar',
+    data:{labels:labels.map(d=>d.slice(5)),datasets:[
+      {label:'コストなし',data:dNo,backgroundColor:colNo,borderRadius:3},
+      {label:'コスト込み',data:dCost,backgroundColor:colCost,borderRadius:3}]},
+    options:{responsive:true,
+      plugins:{legend:{labels:{color:'#9aa0ab',boxWidth:12}},
+        tooltip:{callbacks:{label:c=>c.dataset.label+': '+(c.raw>=0?'+':'')+Math.round(c.raw).toLocaleString()+'円'}}},
+      scales:{x:{ticks:{color:'#9aa0ab'},grid:{display:false}},
+              y:{ticks:{color:'#9aa0ab',callback:v=>v+'円'},grid:{color:'#2a2e38'},
+                 grace:'10%'}}}});
 }
 async function loadPositions(){
   try{
