@@ -96,6 +96,12 @@
     <div class="empty" id="posEmpty" style="display:none">保有なし（ノーポジション）</div>
   </div>
 
+  <div class="panel"><h2>日ごとの結果 <span class="note">取引がない日も表示</span></h2>
+    <table id="daysTbl"><thead><tr><th>日付</th><th>状態</th><th>取引</th><th>コストなし</th><th>コスト込み</th></tr></thead>
+    <tbody id="daysRows"></tbody></table>
+    <div class="empty" id="daysEmpty" style="display:none">記録がまだありません</div>
+  </div>
+
   <div class="panel"><h2>日ごとの収支 <span class="note">コストなし / コスト込み</span></h2>
     <canvas id="dailyChart" height="170"></canvas></div>
 
@@ -137,6 +143,7 @@ async function load(){
   if(!rows.length){
     document.getElementById('empty').style.display='block';
     drawDaily([],[],[]); drawCum([],[],[]);
+    renderDays({});
     return;
   }
   document.getElementById('empty').style.display='none';
@@ -150,8 +157,8 @@ async function load(){
   const wins = rows.filter(r=>r.pnl-costOf(r)>0).length;
 
   const byDay={};
-  rows.forEach(r=>{ byDay[r.date]=byDay[r.date]||{no:0,cost:0};
-    byDay[r.date].no+=r.pnl; byDay[r.date].cost+=r.pnl-costOf(r); });
+  rows.forEach(r=>{ byDay[r.date]=byDay[r.date]||{no:0,cost:0,n:0};
+    byDay[r.date].no+=r.pnl; byDay[r.date].cost+=r.pnl-costOf(r); byDay[r.date].n++; });
   const days=Object.keys(byDay).sort();
 
   set('tToday',yen(tCost),cls(tCost));
@@ -166,6 +173,7 @@ async function load(){
   days.forEach(d=>{ cNo+=byDay[d].no; cCost+=byDay[d].cost; sNo.push(cNo); sCost.push(cCost); });
   drawDaily(days, days.map(d=>byDay[d].no), days.map(d=>byDay[d].cost));
   drawCum(days, sNo, sCost);
+  renderDays(byDay);
 
   const tb=document.getElementById('rows'); tb.innerHTML='';
   const hm = t => t && t.length>15 ? t.slice(11,16) : '—';
@@ -180,6 +188,47 @@ async function load(){
   });
 }
 function set(id,txt,c){ const e=document.getElementById(id); e.textContent=txt; e.className='val '+c; }
+
+async function renderDays(byDay){
+  // days.json(取引なし/休場を含む日次ステータス) と取引集計をマージして表示
+  let days = [];
+  try{
+    const res = await fetch('reports/days.json?t=' + Date.now());
+    if(res.ok) days = (await res.json()).days || [];
+  }catch(e){}
+  days = days.filter(d=>d.date >= V2_START);
+  // days.jsonに未登場だが取引がある日（当日取引直後など）も補完
+  Object.keys(byDay).forEach(d=>{
+    if(!days.some(x=>x.date===d)) days.push({date:d, status:'traded'});
+  });
+  days.sort((a,b)=>b.date.localeCompare(a.date));   // 新しい順
+  const tb = document.getElementById('daysRows'); tb.innerHTML='';
+  if(!days.length){
+    document.getElementById('daysEmpty').style.display='block';
+    document.getElementById('daysTbl').style.display='none'; return;
+  }
+  document.getElementById('daysEmpty').style.display='none';
+  document.getElementById('daysTbl').style.display='';
+  days.slice(0,15).forEach(d=>{
+    const agg = byDay[d.date];
+    const tr = document.createElement('tr');
+    if(d.status==='holiday'){
+      tr.innerHTML = `<td>${d.date.slice(5)}</td>
+        <td colspan="4" class="reason">休場 — ${d.note||'祝日'}</td>`;
+    } else if(!agg){
+      tr.innerHTML = `<td>${d.date.slice(5)}</td>
+        <td class="reason">取引なし</td><td>0</td>
+        <td class="reason">—</td><td class="reason">—</td>`;
+    } else {
+      const nTrades = (typeof d.count==='number') ? d.count : agg.n || '';
+      tr.innerHTML = `<td>${d.date.slice(5)}</td><td>取引あり</td>
+        <td>${nTrades}</td>
+        <td class="${cls(agg.no)}">${yen(agg.no)}</td>
+        <td class="${cls(agg.cost)}">${yen(agg.cost)}</td>`;
+    }
+    tb.appendChild(tr);
+  });
+}
 
 function base(){
   return { color: css('--muted'),
